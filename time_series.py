@@ -192,10 +192,31 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
     result_column = result_column + "last"
 
     #Interval-Based:
-    df = generate_interval_features(df, 10, variable_interest + "list")
-    df = df.dropna()
-    var_interval = df.select_dtypes(include=np.number).columns.tolist()
-    var_interval = [x for x in var_interval if x != id]
+    interval = [2,5,10]
+    max_i = interval[0]
+    accuracy_baseline = 0
+    used_features = []
+    try:
+        for i in interval:
+            df_new = generate_interval_features(df, i, variable_interest + "list")
+            df_new = df_new.dropna()
+            var_interval = df_new.select_dtypes(include=np.number).columns.tolist()
+            var_interval = [x for x in var_interval if x != id]
+            accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result)
+            if accuracy > accuracy_baseline:
+                accuracy_baseline = accuracy
+                max_i = i
+                max_features = used_features
+    except:
+        pass
+    # df = generate_interval_features(df, max_i, variable_interest + "list")
+
+    df = generate_interval_features(df, max_i, variable_interest + "list")
+    df = df_new.dropna()
+    #var_interval = df_new.select_dtypes(include=np.number).columns.tolist()
+    #var_interval = [x for x in var_interval if x != id]
+    var_interval = max_features
+    #accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result)
 
     #pattern based
     candidate_thresholds = get_distribution(array_ok, array_nok)
@@ -220,7 +241,7 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
     for v in var_interval:
           num_cols.append(v)
     num_cols = [x for x in num_cols if x != id]
-    tc.learn_tree(df, result_column, num_cols, variable_result)
+    tc.learn_tree(df, result_column, num_cols, variable_result, True)
 
 use_case = "manufacturing"
 
@@ -265,6 +286,7 @@ if use_case == "manufacturing":
                     i = i +1
     df = df.replace({'casename': uuids})
     df = df.drop(columns="subname")
+    df = df.drop(columns="sub_uuid")
     pipeline(use_case, df, id, variable_result, result_column, variable_interest)
 
 elif use_case == "running":
