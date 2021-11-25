@@ -1,36 +1,39 @@
 import pandas as pd
 import numpy as np
 import math
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 import sys
 from tsfresh import extract_features, select_features
 import tree_code as tc
 
-def prepare_manufacturing_file(df, id):
+def prepare_manufacturing_file(df, id, variable_interest):
     df = df.groupby(id).agg({list, "last"})
     df.columns = [' '.join(col).replace(" ", "") for col in df.columns]
-    df['data_diameterlist'] = df['data_diameterlist'].apply(np.array)
+    df[variable_interest + 'list'] = df[variable_interest + 'list'].apply(np.array)
     X = []
-    values = df[['data_diameterlist']].copy()
-    for v in values['data_diameterlist']:
+    values = df[[variable_interest + 'list']].copy()
+    for v in values[variable_interest + 'list']:
         v = v[~np.isnan(v)]
         X.append(v)
-    df['data_diameterlist'] = X
+    df[variable_interest + 'list'] = X
     df[id] = df.index
     df = df.dropna()
     colnames_numerics_only = df.select_dtypes(include=np.number).columns.tolist()
     return df, colnames_numerics_only
 
-def prepare_dataset_running(df, id):
+def prepare_dataset_running(df, id, variable_interest):
     df = df.groupby(id).agg({list, "last"})
-    df = df.dropna(axis=1)
+    #df = df.dropna(axis=1)
     df.columns = [' '.join(col).replace(" ", "") for col in df.columns]
-    df['temperaturelist'] = df['temperaturelist'].apply(np.array)
+    df[variable_interest + 'list'] = df[variable_interest + 'list'].apply(np.array)
     X = []
-    values = df[['temperaturelist']].copy()
-    for v in values['temperaturelist']:
+    values = df[[variable_interest + 'list']].copy()
+    for v in values[variable_interest + 'list']:
         v = v[~np.isnan(v)]
         X.append(v)
-    df['temperaturelist'] = X
+    df[variable_interest + 'list'] = X
+    df = df.dropna()
     colnames_numerics_only = df.select_dtypes(include=np.number).columns.tolist()
     return df, colnames_numerics_only
 
@@ -169,11 +172,16 @@ def sort_array_ok_nok(df, id, variable_result, variable_interest, result_column)
     print("Array OK: ", len(array_ok))
     return candidates, array_ok, array_nok, uuids_complete
 
-def pipeline(use_case, df, id, variable_result, result_column, variable_interest, interval=None):
+def pipeline(use_case, df, id, variable_result, result_column, variable_interest=None, interval=None):
     candidates, array_ok, array_nok, uuids_complete = sort_array_ok_nok(df, id, variable_result, variable_interest,
                                                                         result_column)
-    candidate_vars = get_candidate_variables(df, id)
+    if not variable_interest:
+        candidate_vars = get_candidate_variables(df, id)
+        candidate_vars = [x for x in candidate_vars if x != result_column]
+    else:
+        candidate_vars = variable_interest
     print("Reoccuring variables/Time Series Candidates: ", list(candidate_vars))
+
 
     if use_case == "manufacturing":
         df_newFeatures = df[[id, variable_interest]]
@@ -181,16 +189,17 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
         y_var = df[[id, result_column]].groupby(id).agg('last').dropna().reset_index()
         y_var = y_var[y_var[id].isin(df_newFeatures[id].values)]
         y_var = y_var[result_column].to_numpy()
-        df, num_cols = prepare_manufacturing_file(df, id)
+        df, num_cols = prepare_manufacturing_file(df, id, variable_interest)
         df = df.reset_index(drop=True)
 
     else:
         df_newFeatures = df.select_dtypes(include=['number'])
-        df, num_cols = prepare_dataset_running(df, id)
+        df, num_cols = prepare_dataset_running(df, id, variable_interest)
         df = df.dropna(axis=1)
         y_var = df[result_column+"last"].to_numpy()
 
     result_column = result_column + "last"
+    max_accuracy = 0
 
     #Interval-Based:
     if not interval:
@@ -206,28 +215,30 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
             df_new = df_new.dropna()
             var_interval = df_new.select_dtypes(include=np.number).columns.tolist()
             var_interval = [x for x in var_interval if x != id]
-            accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result, True)
+            accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result, False)
             if accuracy > accuracy_baseline:
                 accuracy_baseline = accuracy
                 max_i = i
                 max_features = used_features
     except:
         pass
-    # df = generate_interval_features(df, max_i, variable_interest + "list")
-
     df = generate_interval_features(df, max_i, variable_interest + "list")
     df = df.dropna()
-    #var_interval = df_new.select_dtypes(include=np.number).columns.tolist()
-    #var_interval = [x for x in var_interval if x != id]
-    var_interval = max_features
-    #accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result)
+    if accuracy_baseline > max_accuracy:
+        max_accuracy = accuracy_baseline
+        var_interval = max_features
+    else:
+        var_interval = []
+    print("Calculated interval-based features...")
 
     #pattern based
     candidate_thresholds = get_distribution(array_ok, array_nok)
     df, var_pattern = create_latent_variables(candidate_thresholds, df, variable_interest)
     accuracy, var_pattern = tc.learn_tree(df, result_column, var_pattern, variable_result)
-    for var in var_pattern:
-        var_interval.append(var)
+    if accuracy > max_accuracy:
+        for var in var_pattern:
+            var_interval.append(var)
+    print("Calculated pattern-based features...")
 
     #global features
     df_newFeatures = df_newFeatures.dropna().reset_index()
@@ -239,7 +250,8 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
             to_drop.append(d)
     df = df.drop(columns=to_drop)
     num_cols = df.select_dtypes(include=np.number).columns.tolist()
-    accuracy, num_cols = tc.learn_tree(df, result_column, num_cols, False)
+    accuracy, num_cols = tc.learn_tree(df, result_column, num_cols, variable_result)
+    print("Calculated global features...")
 
     #combined
     for v in var_interval:
@@ -293,10 +305,11 @@ if use_case == "manufacturing":
                     i = i +1
     df = df.replace({'casename': uuids})
     df = df.drop(columns="subname")
-    df = df.drop(columns="sub_uuid")
+    #df = df.drop(columns="sub_uuid")
     pipeline(use_case, df, id, variable_result, result_column, variable_interest)
 
-elif use_case == "running":
+else:
+    use_case = "running"
     file = 'data/running.csv'
     id = "uuid"
     result_column = 'event'
