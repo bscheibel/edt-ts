@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import math
+import sys
 from tsfresh import extract_features, select_features
 import tree_code as tc
 
@@ -168,7 +169,7 @@ def sort_array_ok_nok(df, id, variable_result, variable_interest, result_column)
     print("Array OK: ", len(array_ok))
     return candidates, array_ok, array_nok, uuids_complete
 
-def pipeline(use_case, df, id, variable_result, result_column, variable_interest):
+def pipeline(use_case, df, id, variable_result, result_column, variable_interest, interval=None):
     candidates, array_ok, array_nok, uuids_complete = sort_array_ok_nok(df, id, variable_result, variable_interest,
                                                                         result_column)
     candidate_vars = get_candidate_variables(df, id)
@@ -192,17 +193,20 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
     result_column = result_column + "last"
 
     #Interval-Based:
-    interval = [2,5,10]
+    if not interval:
+        interval = [2,5,10]
+    else:
+        interval = interval
     max_i = interval[0]
     accuracy_baseline = 0
-    used_features = []
+    max_features = []
     try:
         for i in interval:
             df_new = generate_interval_features(df, i, variable_interest + "list")
             df_new = df_new.dropna()
             var_interval = df_new.select_dtypes(include=np.number).columns.tolist()
             var_interval = [x for x in var_interval if x != id]
-            accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result)
+            accuracy, used_features = tc.learn_tree(df_new, result_column, var_interval, variable_result, True)
             if accuracy > accuracy_baseline:
                 accuracy_baseline = accuracy
                 max_i = i
@@ -212,7 +216,7 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
     # df = generate_interval_features(df, max_i, variable_interest + "list")
 
     df = generate_interval_features(df, max_i, variable_interest + "list")
-    df = df_new.dropna()
+    df = df.dropna()
     #var_interval = df_new.select_dtypes(include=np.number).columns.tolist()
     #var_interval = [x for x in var_interval if x != id]
     var_interval = max_features
@@ -221,9 +225,9 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
     #pattern based
     candidate_thresholds = get_distribution(array_ok, array_nok)
     df, var_pattern = create_latent_variables(candidate_thresholds, df, variable_interest)
+    accuracy, var_pattern = tc.learn_tree(df, result_column, var_pattern, variable_result)
     for var in var_pattern:
-         var_interval.append(var)
-    tc.learn_tree(df, result_column, var_interval, variable_result)
+        var_interval.append(var)
 
     #global features
     df_newFeatures = df_newFeatures.dropna().reset_index()
@@ -235,7 +239,7 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
             to_drop.append(d)
     df = df.drop(columns=to_drop)
     num_cols = df.select_dtypes(include=np.number).columns.tolist()
-    #tc.learn_tree(df, result_column, num_cols, False)
+    accuracy, num_cols = tc.learn_tree(df, result_column, num_cols, False)
 
     #combined
     for v in var_interval:
@@ -243,7 +247,10 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
     num_cols = [x for x in num_cols if x != id]
     tc.learn_tree(df, result_column, num_cols, variable_result, True)
 
-use_case = "manufacturing"
+try:
+    use_case = sys.argv[1]
+except:
+    use_case = "running"
 
 if use_case == "manufacturing":
     file = "data/manufacturing.csv"
