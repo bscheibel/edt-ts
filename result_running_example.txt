@@ -1,0 +1,116 @@
+BASIC DECISION TREE:
+Accuracy of the model is 59%
+|--- temperaturelast <= 25.50
+|   |--- temperaturelast <= 18.50
+|   |   |--- temperaturelast <= 13.50
+|   |   |   |--- temperaturelast <= 11.50
+|   |   |   |   |--- temperaturelast <= 10.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |--- temperaturelast >  10.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |--- temperaturelast >  11.50
+|   |   |   |   |--- temperaturelast <= 12.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |--- temperaturelast >  12.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |--- temperaturelast >  13.50
+|   |   |   |--- temperaturelast <= 15.50
+|   |   |   |   |--- temperaturelast <= 14.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |--- temperaturelast >  14.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |--- temperaturelast >  15.50
+|   |   |   |   |--- temperaturelast <= 16.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |--- temperaturelast >  16.50
+|   |   |   |   |   |--- temperaturelast <= 17.50
+|   |   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |   |--- temperaturelast >  17.50
+|   |   |   |   |   |   |--- class: Unload Cargo
+|   |--- temperaturelast >  18.50
+|   |   |--- temperaturelast <= 22.50
+|   |   |   |--- temperaturelast <= 21.50
+|   |   |   |   |--- temperaturelast <= 19.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |--- temperaturelast >  19.50
+|   |   |   |   |   |--- temperaturelast <= 20.50
+|   |   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |   |--- temperaturelast >  20.50
+|   |   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |--- temperaturelast >  21.50
+|   |   |   |   |--- class: Unload Cargo
+|   |   |--- temperaturelast >  22.50
+|   |   |   |--- temperaturelast <= 23.50
+|   |   |   |   |--- class: Unload Cargo
+|   |   |   |--- temperaturelast >  23.50
+|   |   |   |   |--- temperaturelast <= 24.50
+|   |   |   |   |   |--- class: Unload Cargo
+|   |   |   |   |--- temperaturelast >  24.50
+|   |   |   |   |   |--- class: Unload Cargo
+|--- temperaturelast >  25.50
+|   |--- temperaturelast <= 28.50
+|   |   |--- temperaturelast <= 26.50
+|   |   |   |--- class: Return to Parking Lot
+|   |   |--- temperaturelast >  26.50
+|   |   |   |--- temperaturelast <= 27.50
+|   |   |   |   |--- class: Return to Parking Lot
+|   |   |   |--- temperaturelast >  27.50
+|   |   |   |   |--- class: Return to Parking Lot
+|   |--- temperaturelast >  28.50
+|   |   |--- temperaturelast <= 29.50
+|   |   |   |--- class: Return to Parking Lot
+|   |   |--- temperaturelast >  29.50
+|   |   |   |--- class: Return to Parking Lot
+
+IF temperaturelast  >  25.5 AND temperaturelast  >  28.5 AND temperaturelast  >  29.5 THEN class: Discard Goods
+
+
+ONLY INTERVAL-BASED:
+Accuracy of the model is 66%
+Precision:  [0.69829684 0.63837012]
+Used features:  ['temperaturelist1_max']
+|--- temperaturelist1_max <= 25.50
+|   |--- class: Transfer Goods
+|--- temperaturelist1_max >  25.50
+|   |--- class: Discard Goods
+
+IF (temperaturelist1_max >  25.50) THEN class: Discard Goods 
+
+
+ONLY PATTERN-BASED:
+Accuracy of the model is 100%
+Precision:  [1. 1.]
+Used features:  ['temperaturelist.count(26.0)>=4.0']
+|--- temperaturelist.count(26.0)>=4.0 <= 0.50
+|   |--- class: Transfer Goods
+|--- temperaturelist.count(26.0)>=4.0 >  0.50
+|   |--- class: Discard Goods
+
+IF (temperaturelist.count(26.0)>=4.0 == TRUE) THEN class: Discard Goods 
+
+
+ONLY GLOBAL FEATURES:
+Accuracy of the model is 100%
+Precision:  [0.99601594 1.        ]
+Used features:  ['temperature__quantile__q_0.8']
+|--- temperature__quantile__q_0.8 <= 25.90
+|   |--- class: Transfer Goods
+|--- temperature__quantile__q_0.8 >  25.90
+|   |--- class: Discard Goods
+
+IF (temperature__quantile__q_0.8 >  25.90) THEN class: Discard Goods 
+
+
+COMBINED:
+Accuracy of the model is 100%
+Precision:  [1. 1.]
+Used features:  ['temperaturelist.count(26.0)>=4.0']
+|--- temperaturelist.count(26.0)>=4.0 <= 0.50
+|   |--- class: Transfer Goods
+|--- temperaturelist.count(26.0)>=4.0 >  0.50
+|   |--- class: Discard Goods
+
+IF (temperaturelist.count(26.0)>=4.0 == TRUE) THEN class: Discard Goods 
+
+
+

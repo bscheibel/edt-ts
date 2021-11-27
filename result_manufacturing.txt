@@ -1,0 +1,81 @@
+BASIC DECISION TREE:
+Accuracy of the model is 45%
+|--- casename <= 2242.50
+|   |--- data_diameterlast <= 36.13
+|   |   |--- casename <= 2179.00
+|   |   |   |--- casename <= 1932.50
+|   |   |   |   |--- data_diameterlast <= 27.26
+|   |   |   |   |   |--- class: nok
+|   |   |   |   |--- data_diameterlast >  27.26
+|   |   |   |   |   |--- class: ok
+|   |   |   |--- casename >  1932.50
+|   |   |   |   |--- class: nok
+|   |   |--- casename >  2179.00
+|   |   |   |--- class: ok
+|   |--- data_diameterlast >  36.13
+|   |   |--- class: ok
+|--- casename >  2242.50
+|   |--- casename <= 2602.00
+|   |   |--- data_diameterlast <= 27.17
+|   |   |   |--- class: ok
+|   |   |--- data_diameterlast >  27.17
+|   |   |   |--- class: nok
+|   |--- casename >  2602.00
+|   |   |--- data_diameterlast <= 27.32
+|   |   |   |--- class: nok
+|   |   |--- data_diameterlast >  27.32
+|   |   |   |--- class: ok
+
+IF casename  <= 2242.5 AND data_diameterlast  <= 36.1299991607666 AND casename  <= 2179.0 AND casename  <= 1932.5 AND data_diameterlast  <= 27.255000114440918 THEN class: NOK
+
+
+ONLY INTERVAL-BASED:
+Accuracy of the model is 91%
+Precision:  [1.  0.9]
+Used features:  ['data_diameterlist2_percentchange']
+|--- data_diameterlist2_percentchange <= 0.16
+|   |--- class: ok
+|--- data_diameterlist2_percentchange >  0.16
+|   |--- class: nok
+
+IF (data_diameterlist2_percentchange >  0.16) THEN class: nok 
+
+
+ONLY PATTERN-BASED:
+Accuracy of the model is 9%
+Precision:  [0.1 0. ]
+Used features:  ['data_diameterlist.count(38.15)>=1.0']
+|--- data_diameterlist.count(38.15)>=1.0 <= 0.50
+|   |--- class: ok
+|--- data_diameterlist.count(38.15)>=1.0 >  0.50
+|   |--- class: nok
+
+IF (data_diameterlist.count(38.15)>=1.0 == TRUE) THEN class: nok 
+
+
+ONLY GLOBAL FEATURES:
+Accuracy of the model is 64%
+Precision:  [0.25       0.85714286]
+Used features:  ['data_diameter__cid_ce__normalize_False', 'data_diameter__change_quantiles__f_agg_"mean"__isabs_False__qh_0.8__ql_0.6']
+|--- data_diameter__cid_ce__normalize_False <= 27.34
+|   |--- data_diameter__change_quantiles__f_agg_"mean"__isabs_False__qh_0.8__ql_0.6 <= 0.01
+|   |   |--- class: ok
+|   |--- data_diameter__change_quantiles__f_agg_"mean"__isabs_False__qh_0.8__ql_0.6 >  0.01
+|   |   |--- class: nok
+|--- data_diameter__cid_ce__normalize_False >  27.34
+|   |--- class: nok
+
+IF (data_diameter__cid_ce__normalize_False > 27.342) THEN class: nok 
+
+
+COMBINED
+Accuracy of the model is 91%
+Precision:  [1.  0.9]
+Used features:  ['data_diameterlist2_percentchange']
+|--- data_diameterlist2_percentchange <= 0.16
+|   |--- class: ok
+|--- data_diameterlist2_percentchange >  0.16
+|   |--- class: nok
+
+IF (data_diameterlist2_percentchange >  0.16) THEN class: nok 
+

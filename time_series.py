@@ -9,25 +9,8 @@ from tsfresh import extract_features, select_features
 import tree_code as tc
 
 
-def prepare_manufacturing_file(df, id, variable_interest):
+def prepare_dataset(df, id, variable_interest):
     df = df.groupby(id).agg({list, "last"})
-    df.columns = [' '.join(col).replace(" ", "") for col in df.columns]
-    df[variable_interest + 'list'] = df[variable_interest + 'list'].apply(np.array)
-    X = []
-    values = df[[variable_interest + 'list']].copy()
-    for v in values[variable_interest + 'list']:
-        v = v[~np.isnan(v)]
-        X.append(v)
-    df[variable_interest + 'list'] = X
-    df[id] = df.index
-    df = df.dropna()
-    colnames_numerics_only = df.select_dtypes(include=np.number).columns.tolist()
-    return df, colnames_numerics_only
-
-
-def prepare_dataset_running(df, id, variable_interest):
-    df = df.groupby(id).agg({list, "last"})
-    # df = df.dropna(axis=1)
     df.columns = [' '.join(col).replace(" ", "") for col in df.columns]
     df[variable_interest + 'list'] = df[variable_interest + 'list'].apply(np.array)
     X = []
@@ -187,16 +170,14 @@ def sort_array_ok_nok(df, id, variable_result, variable_interest, result_column)
 def pipeline(use_case, df, id, variable_result, result_column, variable_interest=None, interval=None):
     candidates, array_ok, array_nok, uuids_complete = sort_array_ok_nok(df, id, variable_result, variable_interest,
                                                                         result_column)
-    # if not variable_interest:
     candidate_vars = get_candidate_variables(df, id)
     candidate_vars = [x for x in candidate_vars if x != result_column]
-    # else:
-    #     candidate_vars = [variable_interest]
     print("Reoccuring variables/Time Series Candidates: ", (candidate_vars))
     num_cols_all = []
     df_og = df
     df_reset = df
     result_column_og = result_column
+
 
     for c in candidate_vars:
         df = df_reset
@@ -207,12 +188,13 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
             y_var = df[[id, result_column_og]].groupby(id).agg('last').dropna().reset_index()
             y_var = y_var[y_var[id].isin(df_newFeatures[id].values)]
             y_var = y_var[result_column_og].to_numpy()
-            df, num_cols = prepare_manufacturing_file(df, id, variable_interest)
+            df, num_cols = prepare_dataset(df, id, variable_interest)
+            df[id] = df.index
             df = df.reset_index(drop=True)
 
         else:
             df_newFeatures = df.select_dtypes(include=['number'])
-            df, num_cols = prepare_dataset_running(df, id, variable_interest)
+            df, num_cols = prepare_dataset(df, id, variable_interest)
             df = df.dropna(axis=1)
             y_var = df[result_column_og + "last"].to_numpy()
 
@@ -258,7 +240,7 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
                 var_interval.append(var)
         print("Calculated pattern-based features...")
 
-        # global features
+        #global features
         df_newFeatures = df_newFeatures.dropna().reset_index()
         global_features = generate_global_features(df_newFeatures, y_var, id, variable_interest)
         df = pd.merge(df, global_features, on=id)
@@ -278,19 +260,17 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
         if len(candidate_vars) == 1:
             df_og = df
             num_cols_all = num_cols
-            # tc.learn_tree(df, result_column, num_cols, variable_result, True)
         else:
             df_og = pd.merge(df, df_og, on=id, how="outer", suffixes=('', '_y'))
             num_cols_all.extend(num_cols)
 
-    # print(df_og.columns)
     tc.learn_tree(df_og, result_column, num_cols_all, variable_result, True)
 
 
 try:
     use_case = sys.argv[1]
 except:
-    use_case = "running"
+    use_case = "manufacturing"
 
 if use_case == "manufacturing":
     file = "data/manufacturing.csv"
@@ -302,7 +282,6 @@ if use_case == "manufacturing":
     df = df.rename(columns={'sub_concept': 'subname', 'case:concept:name': 'casename'})
     subuuids = dict()
     for index, row in df.iterrows():
-        # print(row.casename, row.subname)
         if not math.isnan(row.subname):
             if row.casename in subuuids:
                 if type(subuuids[row.casename]) != list:
@@ -310,12 +289,10 @@ if use_case == "manufacturing":
                     temp.append(subuuids[row.casename])
                     temp.append(row.subname)
                     subuuids[row.casename] = temp
-                    # print(temp)
                 else:
                     temp = subuuids[row.casename]
                     temp.append(row.subname)
                     subuuids[row.casename] = temp
-                    # print(subuuids[row.uuid])
             else:
                 subuuids[row.casename] = row.subname
     for key, value in subuuids.items():
@@ -325,7 +302,6 @@ if use_case == "manufacturing":
     for key, value in subuuids.items():
         for key1, subkeys in subuuids.items():
             for subkey in subkeys:
-                # print(key, int(v))
                 if key == int(subkey):
                     subsub = subuuids[subkey][0]
                     uuids[subkey] = key1

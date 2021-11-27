@@ -1,20 +1,20 @@
 # edt-ts
 
-OS: Fedora 34 
-
-Python: version 3.9 
- 
-Python modules: 
-* pandas 
-* numpy 
-* tslearn 
-* sklearn
-* tsfresh 
+Requirements:
+* OS: Fedora 34 
+* Python: version 3.9 
+*Python modules: 
+    * pandas 
+    * numpy 
+    * tslearn 
+    * sklearn
+    * tsfresh 
 
 These packages can be installed using pip, the version number is important (especially for tsfresh). 
 
-The folder 'data' includes csv files for the running example as w**ell as the manufacturing use case.
+The folder 'data' includes csv files for the running example as well as the manufacturing use case.
 The manufacturing use case data was originally in yaml form, converted to XES and then to csv. 
+The full results can be seen in 'results.pdf'.
 
 To start the script in terminal: python time_series.py {running, manufacturing}.
 Per default, the running example use case is started. 
