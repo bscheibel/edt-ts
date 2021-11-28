@@ -56,14 +56,13 @@ def get_rules(model, features, results, result):
         classes = path[-1][0][0]
         l = np.argmax(classes)
         if results[l] != result:
-            print(results[l])
             continue
         else:
-            rule += f"class: {results[l]} "
+            rule += f"class: {result} "
             rules += [rule]
     return rules
 
-def learn_tree(df, result_column, names, result, final=False):
+def learn_tree(df, result_column, names, result, results=None, final=False):
     y_var = df[result_column].values
     X_var = df[names]
     features = np.array(list(X_var))
@@ -75,7 +74,6 @@ def learn_tree(df, result_column, names, result, final=False):
     X_var = X_var[features]
     features = list(X_var)
     X_train, X_test, y_train, y_test = train_test_split(X_var, y_var, test_size=0.20, shuffle=False, stratify=None, random_state=RANDOMSEED)
-    print(sklearn.utils.check_random_state(random_seed))
     clf = tree(random_state=RANDOMSEED)
     path = clf.cost_complexity_pruning_path(X_train, y_train)
     ccp_alphas, impurities = path.ccp_alphas, path.impurities
@@ -120,7 +118,6 @@ def learn_tree(df, result_column, names, result, final=False):
         print("Used features: ", used_features)
         tree_rules = export_text(model, feature_names=features)
         print(tree_rules)
-        results = list(set(df[result_column].values))
         rules = (get_rules(model, features, results, result))
         for r in rules:
             print(r)

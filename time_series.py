@@ -167,7 +167,7 @@ def sort_array_ok_nok(df, id, variable_result, variable_interest, result_column)
     return candidates, array_ok, array_nok, uuids_complete
 
 
-def pipeline(use_case, df, id, variable_result, result_column, variable_interest=None, interval=None):
+def pipeline(use_case, df, id, variable_result,results,result_column, variable_interest=None, interval=None):
     candidates, array_ok, array_nok, uuids_complete = sort_array_ok_nok(df, id, variable_result, variable_interest,
                                                                         result_column)
     candidate_vars = get_candidate_variables(df, id)
@@ -264,17 +264,19 @@ def pipeline(use_case, df, id, variable_result, result_column, variable_interest
             df_og = pd.merge(df, df_og, on=id, how="outer", suffixes=('', '_y'))
             num_cols_all.extend(num_cols)
 
-    tc.learn_tree(df_og, result_column, num_cols_all, variable_result, True)
+    tc.learn_tree(df_og, result_column, num_cols_all, variable_result, results, True)
 
 
 try:
     use_case = sys.argv[1]
 except:
-    use_case = "manufacturing"
+    use_case = "running"
 
+#preprocessing happens here
 if use_case == "manufacturing":
     file = "data/manufacturing.csv"
     id = "casename"
+    results = ['nok', 'ok']
     variable_result = "nok"
     result_column = "case:data_success"
     variable_interest = "data_diameter"
@@ -310,16 +312,17 @@ if use_case == "manufacturing":
     df = df.replace({'casename': uuids})
     df = df.drop(columns="subname")
     df = df.drop(columns="sub_uuid")
-    pipeline(use_case, df, id, variable_result, result_column, variable_interest)
+    pipeline(use_case, df, id, variable_result, results, result_column, variable_interest)
 
 else:
     use_case = "running"
     file = 'data/running.csv'
     id = "uuid"
+    results = ['Discard Goods', 'Transfer Goods']
     result_column = 'event'
     variable_result = 'Discard Goods'
     variable_interest = "temperature"
     df = pd.read_csv(file)
     df = df.rename(columns={"timestamp": "time:timestamp"})
-    pipeline(use_case, df, id, variable_result, result_column, variable_interest)
+    pipeline(use_case, df, id, variable_result, results, result_column, variable_interest)
 
