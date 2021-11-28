@@ -3,7 +3,7 @@
 Requirements:
 * OS: Fedora 34 
 * Python: version 3.9 
-* Python modules: 
+* Python packages: 
     * pandas==1.2.0
     * numpy==1.20.1
     * scikit_learn==0.24.0
@@ -18,6 +18,12 @@ The full results, including the baseline results, can be seen in result_{running
 To start the script in terminal: python time_series.py {running, manufacturing}.
 Per default, the running example use case is started. 
 
+OR run using pipenv, which creates a virtual environment with all needed packages installed:
+* python 3.9 needed
+* install pipenv via pip
+* run "pipenv install"
+* run "pipenv run python time_series.py {use_case}"
+
 Parameters that have to be set: 
 * use_case: if one of the existing use cases is to be reproduced, just enter the use case name e.g. running, manufacturing 
 
@@ -27,10 +33,8 @@ For a new dataset:
 * result_column: whats the name of the column that specifies the result 
 * variable_result: if more than two categories exist, which category is of interest 
 * results: all possible result classes
-
 Optionally: 
 * interval: if the intervals are to be set manually
 * variable_interest: if not given, possible time series variables are discovered and all are included in the process
 
-
-To try with additional data the dataset might has to be prepared. Look at preprocessing code for an example. The dataset for the running example can be directly used, only the input arguments have to be defined.
+To try with new data the dataset might has to be adapted. Look at preprocessing code for the manufacturing use case for an example.
