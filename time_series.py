@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import math
 import warnings
-
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 import sys
 from tsfresh import extract_features, select_features
@@ -266,63 +265,64 @@ def pipeline(use_case, df, id, variable_result,results,result_column, variable_i
 
     tc.learn_tree(df_og, result_column, num_cols_all, variable_result, results, True)
 
+if __name__ == '__main__' :
 
-try:
-    use_case = sys.argv[1]
-except:
-    use_case = "running"
+    try:
+        use_case = sys.argv[1]
+    except:
+        use_case = "running"
 
-#preprocessing happens here
-if use_case == "manufacturing":
-    file = "data/manufacturing.csv"
-    id = "casename"
-    results = ['nok', 'ok']
-    variable_result = "nok"
-    result_column = "case:data_success"
-    variable_interest = "data_diameter"
-    df = pd.read_csv(file)
-    df = df.rename(columns={'sub_concept': 'subname', 'case:concept:name': 'casename'})
-    subuuids = dict()
-    for index, row in df.iterrows():
-        if not math.isnan(row.subname):
-            if row.casename in subuuids:
-                if type(subuuids[row.casename]) != list:
-                    temp = []
-                    temp.append(subuuids[row.casename])
-                    temp.append(row.subname)
-                    subuuids[row.casename] = temp
+    #preprocessing happens here
+    if use_case == "manufacturing":
+        file = "data/manufacturing.csv"
+        id = "casename"
+        results = ['nok', 'ok']
+        variable_result = "nok"
+        result_column = "case:data_success"
+        variable_interest = "data_diameter"
+        df = pd.read_csv(file)
+        df = df.rename(columns={'sub_concept': 'subname', 'case:concept:name': 'casename'})
+        subuuids = dict()
+        for index, row in df.iterrows():
+            if not math.isnan(row.subname):
+                if row.casename in subuuids:
+                    if type(subuuids[row.casename]) != list:
+                        temp = []
+                        temp.append(subuuids[row.casename])
+                        temp.append(row.subname)
+                        subuuids[row.casename] = temp
+                    else:
+                        temp = subuuids[row.casename]
+                        temp.append(row.subname)
+                        subuuids[row.casename] = temp
                 else:
-                    temp = subuuids[row.casename]
-                    temp.append(row.subname)
-                    subuuids[row.casename] = temp
-            else:
-                subuuids[row.casename] = row.subname
-    for key, value in subuuids.items():
-        subuuids[key] = list(set(value))
-    i = 0
-    uuids = dict()
-    for key, value in subuuids.items():
-        for key1, subkeys in subuuids.items():
-            for subkey in subkeys:
-                if key == int(subkey):
-                    subsub = subuuids[subkey][0]
-                    uuids[subkey] = key1
-                    uuids[subsub] = key1
-                    i = i + 1
-    df = df.replace({'casename': uuids})
-    df = df.drop(columns="subname")
-    df = df.drop(columns="sub_uuid")
-    pipeline(use_case, df, id, variable_result, results, result_column, variable_interest)
+                    subuuids[row.casename] = row.subname
+        for key, value in subuuids.items():
+            subuuids[key] = list(set(value))
+        i = 0
+        uuids = dict()
+        for key, value in subuuids.items():
+            for key1, subkeys in subuuids.items():
+                for subkey in subkeys:
+                    if key == int(subkey):
+                        subsub = subuuids[subkey][0]
+                        uuids[subkey] = key1
+                        uuids[subsub] = key1
+                        i = i + 1
+        df = df.replace({'casename': uuids})
+        df = df.drop(columns="subname")
+        df = df.drop(columns="sub_uuid")
+        pipeline(use_case, df, id, variable_result, results, result_column, variable_interest)
 
-else:
-    use_case = "running"
-    file = 'data/running.csv'
-    id = "uuid"
-    results = ['Discard Goods', 'Transfer Goods']
-    result_column = 'event'
-    variable_result = 'Discard Goods'
-    variable_interest = "temperature"
-    df = pd.read_csv(file)
-    df = df.rename(columns={"timestamp": "time:timestamp"})
-    pipeline(use_case, df, id, variable_result, results, result_column, variable_interest)
+    else:
+        use_case = "running"
+        file = 'data/running.csv'
+        id = "uuid"
+        results = ['Discard Goods', 'Transfer Goods']
+        result_column = 'event'
+        variable_result = 'Discard Goods'
+        variable_interest = "temperature"
+        df = pd.read_csv(file)
+        df = df.rename(columns={"timestamp": "time:timestamp"})
+        pipeline(use_case, df, id, variable_result, results, result_column, variable_interest)
 

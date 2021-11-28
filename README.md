@@ -3,12 +3,11 @@
 Requirements:
 * OS: Fedora 34 
 * Python: version 3.9 
-*Python modules: 
-    * pandas 
-    * numpy 
-    * tslearn 
-    * sklearn
-    * tsfresh 
+* Python modules: 
+    * pandas==1.2.0
+    * numpy==1.20.1
+    * scikit_learn==0.24.0
+    * tsfresh==0.18.0
 
 These packages can be installed using pip, the version is important (especially for tsfresh). 
 

@@ -1,9 +1,7 @@
 import numpy as np
 from sklearn.tree import _tree
 from sklearn.tree import DecisionTreeClassifier as tree
-from sklearn.feature_selection import SelectKBest, chi2
 from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.datasets import load_iris
 import warnings
 import sklearn.exceptions
 warnings.filterwarnings("ignore", category=sklearn.exceptions.UndefinedMetricWarning)
