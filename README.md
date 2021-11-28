@@ -33,8 +33,9 @@ For a new dataset:
 * result_column: whats the name of the column that specifies the result 
 * variable_result: if more than two categories exist, which category is of interest 
 * results: all possible result classes
+
 Optionally: 
 * interval: if the intervals are to be set manually
 * variable_interest: if not given, possible time series variables are discovered and all are included in the process
 
-To try with new data the dataset might has to be adapted. Look at preprocessing code for the manufacturing use case for an example.
+To try with new dataset, the dataset might has to be adapted. Look at preprocessing code for the manufacturing use case for an example.
