@@ -15,7 +15,7 @@ The folder 'data' includes csv files for the running example as well as the manu
 The manufacturing use case data was originally in yaml form, converted to XES and then to csv. 
 The full results, including the baseline results, can be seen in result_{running, manufacturing}.txt
 
-To start the script in terminal: python time_series.py {running, manufacturing}.
+To start the script in terminal: python time_series.py {running_example, manufacturing}.
 Per default, the running example use case is started. 
 
 OR run using pipenv, which creates a virtual environment with all needed packages installed:
