@@ -2,7 +2,7 @@
 
 Requirements:
 * OS: Fedora 34 
-* Python: version 3.9 
+* Python: version 3.9.6 
 * Python packages: 
     * pandas==1.2.0
     * numpy==1.20.1
