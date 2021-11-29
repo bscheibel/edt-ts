@@ -38,4 +38,4 @@ Optionally:
 * interval: if the intervals are to be set manually
 * variable_interest: if not given, possible time series variables are discovered and all are included in the process
 
-To try with new dataset, these variables have to be given as part of the preprocessing step. In addition, the dataset may has to be transformed. Look at preprocessing code for the manufacturing use case for an example.
+To try with new dataset, these variables have to be defined as part of the preprocessing step. In addition, the dataset may has to be transformed. Look at preprocessing code for the manufacturing use case for an example.
