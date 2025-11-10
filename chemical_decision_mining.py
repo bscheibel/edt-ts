@@ -72,37 +72,14 @@ def prune_features(
     corr_threshold: float = 0.9,
     variance_threshold: float = 0.0,
 ) -> pd.DataFrame:
-    """
-    Prune redundant or uninformative features using variance, correlation, and importance.
-    Keeps exactly one feature per highly correlated cluster.
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Features DataFrame.
-    y : pd.Series, optional
-        Target labels (needed for importance threshold).
-    importance_threshold : float
-        Minimum importance to keep (if y provided).
-    corr_threshold : float
-        Pearson correlation threshold for pruning (0.9 = highly correlated).
-    variance_threshold : float
-        Drop features with variance <= threshold (default 0 — keeps all).
-
-    Returns
-    -------
-    pd.DataFrame : reduced feature set
-    """
     X_pruned = X.copy()
 
-    # --- 1️⃣ Drop low-variance columns ---------------------------------------
     if variance_threshold > 0:
         selector = VarianceThreshold(threshold=variance_threshold)
         selector.fit(X_pruned.fillna(0))
         X_pruned = X_pruned.loc[:, selector.get_support()]
         print(f"Variance pruning → kept {X_pruned.shape[1]} features")
 
-    # --- 2️⃣ Correlation-based pruning ---------------------------------------
     corr_matrix = X_pruned.corr().abs()
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
     to_drop_corr = [column for column in upper.columns if any(upper[column] > corr_threshold)]
@@ -110,7 +87,6 @@ def prune_features(
         print(f"Correlation pruning → dropping {len(to_drop_corr)} correlated features")
         X_pruned = X_pruned.drop(columns=to_drop_corr)
 
-    # --- 3️⃣ Optional importance pruning -------------------------------------
     if y is not None and importance_threshold > 0:
         rf = RandomForestClassifier(
             n_estimators=100,
@@ -126,15 +102,11 @@ def prune_features(
         X_pruned = X_pruned[keep_cols]
         print(f"Importance pruning → removed {removed} low-importance features")
 
-    print(f"✅ Final feature count after pruning: {X_pruned.shape[1]}")
+    print(f"Final feature count after pruning: {X_pruned.shape[1]}")
     return X_pruned
-def verify_consecutive_pump_adjustments(df, case_col="case_id", activity_col="activity"):
-    """
-    Identifies and inspects sequences where 'Pump adjustment' immediately
-    follows another 'Pump adjustment' within the same case.
 
-    Returns a DataFrame of those consecutive pairs and a count per case.
-    """
+def verify_consecutive_pump_adjustments(df, case_col="case_id", activity_col="activity"):
+
     df_sorted = df.sort_values([case_col, "event_timestamp"]).copy()
     df_sorted["next_activity"] = df_sorted.groupby(case_col)[activity_col].shift(-1)
 
@@ -154,29 +126,8 @@ def verify_consecutive_pump_adjustments(df, case_col="case_id", activity_col="ac
     return consecutive
 
 def count_predecessor_events(df, case_col="case_id", activity_col="activity"):
-    """
-    Counts which activities directly precede a 'Pump adjustment' within each process case.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Event log with at least: [case_id, activity_name, timestamp].
-        Must be ordered chronologically per case.
-    case_col : str, default="case_id"
-        Column that identifies each process instance.
-    activity_col : str, default="activity"
-        Column containing the activity/event name.
-
-    Returns
-    -------
-    pd.Series
-        Counts of preceding activities for all 'Pump adjustment' events,
-        sorted descending.
-    """
-    # Ensure chronological ordering within each case
     df_sorted = df.sort_values([case_col, "event_timestamp"]).copy()
 
-    # Shift the activity names to align each event with its predecessor
     df_sorted["prev_activity"] = (
         df_sorted.groupby(case_col)[activity_col].shift(1)
     )
@@ -194,15 +145,11 @@ def count_predecessor_events(df, case_col="case_id", activity_col="activity"):
 # ------------------------------------------------------------
 
 def extract_window_features_fast(df_events, df_signals, windows=(45, 60), n_jobs=-1):
-    """
-    Faster alternative to extract_window_features using grouped access and parallelization.
-    Keeps same output format and naming.
-    """
+
     use_event_id_col = "event_id" in df_events.columns
     event_ids = df_events["event_id"].values if use_event_id_col else df_events.index
     results = []
 
-    # --- group signals by case to avoid repeated DataFrame filtering ---
     grouped_signals = {cid: g.sort_values("time_index") for cid, g in df_signals.groupby("case_id")}
     all_sensors = df_signals["sensor"].unique()
     has_flow = "Flow" in all_sensors
@@ -270,7 +217,7 @@ def extract_window_features_fast(df_events, df_signals, windows=(45, 60), n_jobs
                     v1, v2 = sensor_groups[s1], sensor_groups[s2]
                     if len(v1) > 1 and len(v1) == len(v2):
                         corr = safe_corr(v1, v2)
-                        feat_row[f"corr_{s1.replace(' ','_')}__{s2.replace(' ','_')}_win{w}m"] = corr
+                        feat_row[f"corr_{s1.replace(' ','_')}__{s2.replace(' ', '_')}_win{w}m"] = corr
 
         return feat_row if len(feat_row) > 1 else None
 
@@ -286,7 +233,6 @@ def extract_window_features_fast(df_events, df_signals, windows=(45, 60), n_jobs
 
     final_feats = pd.DataFrame(feats_list).set_index("id").reindex(event_ids)
 
-    # --- optional trend & stability comparison for 10m vs 60m ---
     for sensor in all_sensors:
         nm = sensor.replace(" ", "_")
         if f"{nm}__slope_win10m" in final_feats and f"{nm}__slope_win60m" in final_feats:
@@ -313,10 +259,8 @@ def extract_window_features_fast(df_events, df_signals, windows=(45, 60), n_jobs
     return final_feats
 
 def engineer_domain_features(X: pd.DataFrame) -> pd.DataFrame:
-    """Add domain-specific binary or derived features reflecting physical process heuristics."""
     X_new = X.copy()
 
-    # --- Existing domain heuristics ---
     if "Tank_Pressure__slope_win10m" in X:
         X_new["feat_tank_pressure_rise"] = (X["Tank_Pressure__slope_win10m"] > 0.05).astype(int)
 
@@ -334,7 +278,6 @@ def engineer_domain_features(X: pd.DataFrame) -> pd.DataFrame:
     if corr_col in X:
         X_new["feat_flow_pressure_uncoupled"] = (X[corr_col] < 0.2).astype(int)
 
-    # --- Added only the impactful new feature ---
     if "Filter_1_Inlet_Pressure__mean_win60m" in X:
         # Rolling skewness over past events as a signal-of-variability proxy
         X_new["feat_filter1_pressure_skew_evt"] = (
@@ -357,7 +300,6 @@ def parse_array(x):
     return np.array([])
 
 def build_long_format_sensor_data(df):
-    """Convert event rows with sensor arrays to long-format time series."""
     df = df.copy()
     for col in SENSOR_COLS:
         df[col] = df[col].apply(parse_array)
@@ -373,14 +315,14 @@ def build_long_format_sensor_data(df):
                 "event_id": idx,
                 "case_id": row["case_id"],
                 "sensor": col,
-                "time_index": base_time + pd.to_timedelta(int(t), unit="s"),
+                #"time_index": base_time + pd.to_timedelta(int(t), unit="s"),
+                "time_index": base_time - pd.to_timedelta(int(t), unit="s"),
                 "value": v
             } for t, v in enumerate(values))
 
     return pd.DataFrame.from_records(records)
 
 def build_last_events_features(df, window_feats, N=1, target_activity="Pump adjustment"):
-    """Construct features from N previous events and join with sensor features."""
     for n in range(1, N + 1):
         df[f"prev_event_{n}"] = df.groupby("case_id")["activity"].shift(n)
 
@@ -440,7 +382,7 @@ def main():
     feats = engineer_domain_features(feats)
 
     feats = build_last_events_features(df, feats, N=3, target_activity="Pump adjustment")
-
+    print(feats.head())
     feats.to_csv("data/feats_from_analysis.csv", index=False)
 
     print("Feature set constructed")
@@ -451,7 +393,6 @@ def main():
     X = pd.get_dummies(feats.drop(columns=["target"]), columns=["adjustment_type"], drop_first=True)
     y = feats["target"]
 
-    # Prune redundant features
     #X = prune_features(X,y,importance_threshold=0.0009,corr_threshold=0.90,variance_threshold=0.0)
     #X, y = feats.drop(columns="target"), feats["target"]
     #learn_tree(df=X, result_column=y, names=X.columns, result="Pump adjustment", final=True)

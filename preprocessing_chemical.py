@@ -29,7 +29,7 @@ SINGLE_ACTIVITIES = {"Pump start", "Pump stop", "Pump adjustment"}
 
 
 def build_intervals(case_df: pd.DataFrame) -> pd.DataFrame:
-    """Convert start/complete lifecycle events into start-end intervals."""
+    ##Convert start/complete lifecycle events into start-end intervals
     case_df = case_df.sort_values("timestamp")
     intervals, open_stack = [], {}
 
@@ -150,7 +150,7 @@ sensor_cols = [c for c in sensors.columns if c not in ["case_id", "sensor_time"]
 # 3) Collect sensor values per interval
 # -------------------------------------------------
 def listify_sensor_values(case_intervals: pd.DataFrame, case_sensors: pd.DataFrame) -> pd.DataFrame:
-    """Return one list column per sensor with all sensor values within each interval."""
+    ##Return one list column per sensor with all sensor values within each interval
     out = {col: [] for col in sensor_cols}
     t = case_sensors["sensor_time"].values if case_sensors is not None else None
 
