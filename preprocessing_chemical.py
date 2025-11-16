@@ -1,49 +1,60 @@
-import re
 from pathlib import Path
+import re
 import pandas as pd
 
-# -------------------------------------------------
-# 0) Load and prepare event log
-# -------------------------------------------------
-EVENTS_PATH = Path("data/process_event_data2.csv")
+# input paths
+EVENTS_PATH = "/Users/beatewais/PycharmProjects/edt-ts-chemical/data/process_event_data2.csv"
+SENSOR_DIR = Path("/Users/beatewais/PycharmProjects/edt-ts-chemical/data/sensor_data")
 
-df = (
+# output paths
+EVENTS_OUT = "/Users/beatewais/PycharmProjects/edt-ts-chemical/data/process_events1.csv"
+SENSORS_OUT = "/Users/beatewais/PycharmProjects/edt-ts-chemical/data/sensor_long1.csv"
+
+# -------------------------------------------------
+# load and prepare event log
+# -------------------------------------------------
+print(f"loading event log from {EVENTS_PATH}")
+
+events = (
     pd.read_csv(EVENTS_PATH)
-      .rename(columns={
-          "CompleteTimestamp": "timestamp",
-          "lifecycle:transition": "lifecycle",
-          "ActivityID": "activity",
-          "Vessel": "resource",
-          "CaseID": "case_id",
-      })
+    .rename(
+        columns={
+            "CaseID": "case_id",
+            "CompleteTimestamp": "timestamp",
+            "lifecycle:transition": "lifecycle",
+            "ActivityID": "activity",
+            "Vessel": "resource",
+        }
+    )
 )
 
-df["timestamp"] = pd.to_datetime(df["timestamp"])
-df = df.sort_values(["case_id", "timestamp"]).reset_index(drop=True)
+# clean up and sort
+events["timestamp"] = pd.to_datetime(events["timestamp"], errors="coerce", utc=True)
+events = events.dropna(subset=["activity", "timestamp", "case_id"])
+events = events.sort_values(["case_id", "timestamp"]).reset_index(drop=True)
 
-# -------------------------------------------------
-# 1) Build activity intervals (including singletons)
-# -------------------------------------------------
+# activities that are instantaneous
 SINGLE_ACTIVITIES = {"Pump start", "Pump stop", "Pump adjustment"}
 
 
-
-def build_intervals(case_df: pd.DataFrame) -> pd.DataFrame:
-    ##Convert start/complete lifecycle events into start-end intervals
-    case_df = case_df.sort_values("timestamp")
+def build_intervals(df: pd.DataFrame) -> pd.DataFrame:
+    # turn start/complete transitions into time intervals
     intervals, open_stack = [], {}
 
-    for _, row in case_df.iterrows():
-        act, res, ts = row["activity"], row["resource"], row["timestamp"]
-        key = (act, res)
-        lifecycle = (row.get("lifecycle") or "").lower()
+    for _, row in df.iterrows():
+        cid = row["case_id"]
+        act = row["activity"]
+        res = row["resource"]
+        ts = row["timestamp"]
+        life = str(row.get("lifecycle", "")).lower().strip()
+        key = (cid, act, res)
 
-        # Handle one-off events
+        # single point events
         if act in SINGLE_ACTIVITIES:
             intervals.append({
-                "case_id": row["case_id"],
-                "resource": res,
+                "case_id": cid,
                 "activity": act,
+                "resource": res,
                 "event_timestamp": ts,
                 "start_time": ts,
                 "end_time": ts,
@@ -51,40 +62,39 @@ def build_intervals(case_df: pd.DataFrame) -> pd.DataFrame:
             })
             continue
 
-        # Handle paired start/complete logic
-        if lifecycle == "start":
+        # start–complete matching
+        if life == "start":
             open_stack.setdefault(key, []).append(row)
-        elif lifecycle == "complete" and open_stack.get(key):
+        elif life == "complete" and open_stack.get(key):
             start_row = open_stack[key].pop(0)
             intervals.append({
-                "case_id": row["case_id"],
-                "resource": res,
+                "case_id": cid,
                 "activity": act,
+                "resource": res,
                 "event_timestamp": start_row["timestamp"],
                 "start_time": start_row["timestamp"],
                 "end_time": ts,
                 "source": "paired",
             })
         else:
-            # No matching lifecycle or unmatched complete
             intervals.append({
-                "case_id": row["case_id"],
-                "resource": res,
+                "case_id": cid,
                 "activity": act,
+                "resource": res,
                 "event_timestamp": ts,
                 "start_time": ts,
                 "end_time": ts,
-                "source": "unmatched_or_no_lifecycle",
+                "source": "unmatched",
             })
 
-    # Handle unmatched starts
-    for (act, res), starts in open_stack.items():
-        for start_row in starts:
-            ts = start_row["timestamp"]
+    # handle unmatched starts
+    for (cid, act, res), starts in open_stack.items():
+        for s in starts:
+            ts = s["timestamp"]
             intervals.append({
-                "case_id": start_row["case_id"],
-                "resource": res,
+                "case_id": cid,
                 "activity": act,
+                "resource": res,
                 "event_timestamp": ts,
                 "start_time": ts,
                 "end_time": ts,
@@ -93,109 +103,62 @@ def build_intervals(case_df: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.DataFrame(intervals)
     if not out.empty:
-        out["duration_min"] = (
-            (out["end_time"] - out["start_time"]).dt.total_seconds() / 60
-        )
+        out["duration_min"] = (out["end_time"] - out["start_time"]).dt.total_seconds() / 60
         out = out.sort_values(["case_id", "start_time", "end_time"]).reset_index(drop=True)
     return out
 
 
-intervals = (
-    df.groupby("case_id", group_keys=False)
-      .apply(build_intervals)
-      .reset_index(drop=True)
+print("building intervals...")
+df_events = build_intervals(events)
+print(
+    f"built {len(df_events)} intervals from {df_events['case_id'].nunique()} cases"
 )
 
+df_events.to_csv(EVENTS_OUT, index=False)
+print(f"saved to {EVENTS_OUT}")
+
 # -------------------------------------------------
-# 2) Load sensor data files
+# load and combine sensor data
 # -------------------------------------------------
-SENSOR_FOLDER = Path("data/sensor_data")
-FNAME_RE = re.compile(r"^Sensor data (.+?)(?:\.csv|\.txt)?$", re.IGNORECASE)
+print(f"loading sensor data from {SENSOR_DIR}")
 
 sensor_frames = []
-for path in SENSOR_FOLDER.glob("*"):
+for path in SENSOR_DIR.glob("*"):
     if not path.is_file():
         continue
-    m = FNAME_RE.match(path.stem)
-    if not m:
-        continue
 
-    case_id = m.group(1)
-    df_sensor = pd.read_csv(path, sep=";", engine="python")
+    try:
+        df_s = pd.read_csv(path, sep=";", engine="python")
+    except Exception:
+        df_s = pd.read_csv(path)
 
-    # Find timestamp column
+    # find timestamp column
     ts_col = next(
-        (c for c in df_sensor.columns if str(c).strip().lower() in {"new timestamp", "timestamp", "time"}),
-        None
+        (c for c in df_s.columns if str(c).strip().lower() in {"timestamp", "time", "new timestamp"}),
+        None,
     )
-    if ts_col is None:
-        raise ValueError(f"No timestamp column found in {path}")
+    if not ts_col:
+        raise ValueError(f"no timestamp column found in {path}")
 
-    df_sensor = (
-        df_sensor
-        .rename(columns={ts_col: "sensor_time"})
-        .assign(sensor_time=lambda d: pd.to_datetime(d["sensor_time"]), case_id=case_id)
-        .sort_values(["case_id", "sensor_time"])
-        .reset_index(drop=True)
-    )
-    sensor_frames.append(df_sensor)
+    df_s = df_s.rename(columns={ts_col: "timestamp"})
+    df_s["timestamp"] = pd.to_datetime(df_s["timestamp"], errors="coerce", utc=True)
+    df_s = df_s.dropna(subset=["timestamp"])
+
+    sensor_cols = [c for c in df_s.columns if c != "timestamp"]
+    for sc in sensor_cols:
+        temp = df_s[["timestamp", sc]].rename(columns={sc: "value"})
+        temp["sensor"] = sc
+        sensor_frames.append(temp)
 
 if not sensor_frames:
-    raise RuntimeError("No sensor files found in data/sensor_data")
+    raise RuntimeError("no sensor files found")
 
-sensors = pd.concat(sensor_frames, ignore_index=True)
-sensor_cols = [c for c in sensors.columns if c not in ["case_id", "sensor_time"]]
+df_sensors = pd.concat(sensor_frames, ignore_index=True)
+df_sensors = df_sensors.sort_values(["timestamp", "sensor"]).reset_index(drop=True)
 
-# -------------------------------------------------
-# 3) Collect sensor values per interval
-# -------------------------------------------------
-def listify_sensor_values(case_intervals: pd.DataFrame, case_sensors: pd.DataFrame) -> pd.DataFrame:
-    ##Return one list column per sensor with all sensor values within each interval
-    out = {col: [] for col in sensor_cols}
-    t = case_sensors["sensor_time"].values if case_sensors is not None else None
+print(f"loaded {df_sensors['sensor'].nunique()} sensors, {len(df_sensors):,} readings total")
 
-    for _, row in case_intervals.iterrows():
-        if t is None:
-            for c in sensor_cols:
-                out[c].append([])
-            continue
+df_sensors.to_csv(SENSORS_OUT, index=False)
+print(f"saved to {SENSORS_OUT}")
 
-        mask = (t >= row["start_time"]) & (t <= row["end_time"])
-        sub = case_sensors.loc[mask, sensor_cols]
-
-        for c in sensor_cols:
-            out[c].append(sub[c].tolist() if not sub.empty else [])
-
-    return pd.DataFrame(out, index=case_intervals.index)
-
-
-intervals_by_case = dict(tuple(intervals.groupby("case_id", sort=False)))
-sensors_by_case = dict(tuple(sensors.groupby("case_id", sort=False)))
-
-sensor_blocks = []
-for cid, case_int in intervals_by_case.items():
-    block = listify_sensor_values(case_int, sensors_by_case.get(cid))
-    sensor_blocks.append(block)
-
-sensor_lists = pd.concat(sensor_blocks).sort_index()
-
-# -------------------------------------------------
-# 4) Combine intervals and sensor data
-# -------------------------------------------------
-events_with_sensors = pd.concat([intervals, sensor_lists], axis=1)
-
-# Merge lifecycle info back for traceability
-df_base = df.rename(columns={"timestamp": "event_timestamp"})
-events_with_sensors = events_with_sensors.merge(
-    df_base[["case_id", "resource", "activity", "event_timestamp", "lifecycle"]],
-    on=["case_id", "resource", "activity", "event_timestamp"],
-    how="left",
-)
-
-# -------------------------------------------------
-# 5) Export
-# -------------------------------------------------
-OUT_PATH = Path("data/event_with_sensor_lists2.csv")
-events_with_sensors.to_csv(OUT_PATH, index=False)
-
-print(f"Finished generating events with sensor lists → {OUT_PATH}")
+print("done.")
