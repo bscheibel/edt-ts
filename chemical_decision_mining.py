@@ -335,5 +335,104 @@ def main():
     full_feats.to_csv("data/enriched_with_history.csv", index=False)
     print("saved data/enriched_with_history.csv")
 
+def main_split_by_activity():
+    full_feats = pd.read_csv("data/feats_from_analysis_without_drifts_and_interactions.csv")
+
+    X = full_feats.drop(columns="target", errors="ignore")
+    y = full_feats["target"]
+    print(f"Feature matrix: {X.shape[0]} × {X.shape[1]}  (positives={y.sum()})")
+
+    # X = prune_features(X, y, importance_threshold=0.0009, corr_threshold=0.9)
+
+    # === GLOBAL MODEL ==========================================================
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.1, stratify=y, random_state=42
+    )
+
+    depths = range(1, 6)
+    scores = [
+        cross_val_score(
+            DecisionTreeClassifier(max_depth=d, random_state=42, class_weight="balanced"),
+            X_train, y_train, cv=5, scoring="accuracy"
+        ).mean()
+        for d in depths
+    ]
+    best_depth = depths[int(np.argmax(scores))]
+    print(f"Best global max_depth: {best_depth}")
+
+    model = DecisionTreeClassifier(max_depth=best_depth,
+                                   random_state=42,
+                                   class_weight="balanced")
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    print("\nGlobal Classification Report:\n", classification_report(y_test, y_pred))
+    visualize_tree(model, X.columns)
+
+    importances = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False)
+    print("\nTop 20 Global Features:\n", importances.head(20))
+
+    # === ACTIVITY-SPECIFIC ANALYSIS ===========================================
+    print("\n🔍 Evaluating per-activity model performance ...")
+
+    results = []
+    activity_cols = [c for c in X.columns if c.startswith("activity_")]
+
+    for activity_col in activity_cols:
+        # Subset data where this current-activity onehot == 1
+        subset = X[X[activity_col] == 1]
+        y_sub = y.loc[subset.index]
+
+        if y_sub.nunique() < 2 or len(subset) < 20:
+            continue
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                subset, y_sub, test_size=0.25, stratify=y_sub, random_state=42
+            )
+
+            depths = range(1, 6)
+            scores = [
+            cross_val_score(
+                DecisionTreeClassifier(max_depth=d, random_state=42, class_weight="balanced"),
+                X_train, y_train, cv=5, scoring="accuracy"
+            ).mean()
+            for d in depths
+            ]
+            local_depth = depths[int(np.argmax(scores))]
+
+            model = DecisionTreeClassifier(max_depth=local_depth,
+                                       random_state=42,
+                                       class_weight="balanced")
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+
+            rep = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+            acc = rep["accuracy"]
+            rec = rep["1"]["recall"]
+
+            f1 = rep["1"]["f1-score"]
+            results.append({
+            "activity": activity_col.replace("activity_",""),
+            "n_samples": len(subset),
+            "best_depth": local_depth,
+            "accuracy": acc,
+            "f1_positive": f1,
+            "recall_positive": rec
+            })
+            print(f"🔸 {activity_col}: acc={acc:.3f}, f1={f1:.3f}, rec={rec}, best_depth={local_depth}, n={len(subset)}")
+        except Exception as e: continue
+
+    res_df = pd.DataFrame(results).sort_values("recall_positive", ascending=False)
+    best = res_df.iloc[0]
+    print("\n🏁 Best-performing activity:")
+    print(best)
+    res_df.to_csv("data/activity_tree_performance.csv", index=False)
+    print("💾 Saved → data/activity_tree_performance.csv")
+
+    full_feats.to_csv("data/enriched_with_history.csv", index=False)
+    print("💾 Saved → data/enriched_with_history.csv")
+
+
 if __name__ == "__main__":
     main()
+    #main_split_by_activity()
