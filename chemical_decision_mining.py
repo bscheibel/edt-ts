@@ -8,15 +8,14 @@ from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier, export_text
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, precision_recall_curve, average_precision_score
 from sklearn import tree
-from scipy.stats import ks_2samp
 from joblib import Parallel, delayed
 from multiprocessing import freeze_support
 import graphviz
+from tqdm import tqdm
 
 
 def calc_slope(x):
@@ -64,7 +63,7 @@ def prune_features(X, y=None, importance_threshold=0.0, corr_threshold=0.9, vari
 
     if y is not None and importance_threshold > 0:
         rf = RandomForestClassifier(
-            n_estimators=100, max_depth=6, n_jobs=-1, random_state=42, class_weight="balanced"
+            n_estimators=100, max_depth=8, n_jobs=-1, random_state=42, class_weight="balanced"
         )
         rf.fit(Xp.fillna(0), y)
         imp = pd.Series(rf.feature_importances_, index=Xp.columns)
@@ -75,11 +74,10 @@ def prune_features(X, y=None, importance_threshold=0.0, corr_threshold=0.9, vari
     print(f"final feature count: {Xp.shape[1]}")
     return Xp
 
-def add_sensor_interactions(df, sensor_keywords=None, max_pairs=30, max_triples=5,
+def add_sensor_interactions(df, max_pairs=30, max_triples=5,
                             include_types=("product", "difference", "ratio", "sum", "norm_diff"), eps=1e-6):
     df = df.copy()
-    if sensor_keywords is None:
-        sensor_keywords = ["filter 1 delta", "filter 1 inlet", "filter 2 delta", "pump circulation", "tank pressure"]
+    sensor_keywords = ["filter 1 delta", "filter 1 inlet", "filter 2 delta", "pump circulation", "tank pressure"]
 
     sensor_cols = [c for c in df.columns if any(k in c.lower() for k in sensor_keywords)]
     if len(sensor_cols) < 2:
@@ -149,7 +147,7 @@ def build_last_events_features(df, window_feats, N=2, target_activity="Pump adju
         drop_first=True,
     )
 
-    resource_enc = pd.get_dummies(df_sorted[["resource"]], prefix="resource", drop_first=True)
+    vessel_enc = pd.get_dummies(df_sorted[["vessel"]], prefix="vessel", drop_first=True)
 
     df_sorted[f"activity_{target_activity}"] = (df_sorted["activity"] == target_activity).astype(int)
     target = df_sorted.groupby("case_id")[f"activity_{target_activity}"].shift(-1)
@@ -159,13 +157,10 @@ def build_last_events_features(df, window_feats, N=2, target_activity="Pump adju
         if col in window_feats.columns:
             window_feats = window_feats.drop(columns=[col])
 
-    feats = (
-        window_feats
-        .join(df_sorted[numeric_cols], how="left")
-        .join(resource_enc, how="left")
+    feats = (window_feats.join(df_sorted[numeric_cols], how="left")
+        .join(vessel_enc, how="left")
         .join(current_activity, how="left")
-        .join(prev_feats, how="left")
-    )
+        .join(prev_feats, how="left"))
 
     feats["target"] = target
     feats = feats.dropna(subset=["target"])
@@ -188,17 +183,37 @@ def engineer_domain_features(X: pd.DataFrame) -> pd.DataFrame:
         Xn["feat_flow_pressure_uncoupled"] = (X[corr_col] < 0.2).astype(int)
     return Xn
 
-def compute_window_features(df_events, df_signals, windows=(0.5,2,5, 15,30,45, 60), n_jobs=-1):
+def compute_window_features(df_events: pd.DataFrame,df_signals: pd.DataFrame,windows=(0.1,0.5, 2, 5, 15, 30, 45, 60,100),n_jobs=-1):
+
+    required_cols = {"case_id", "vessel", "time_index", "sensor", "value"}
+    missing = required_cols - set(df_signals.columns)
+    if missing:
+        raise ValueError(f"Missing required sensor columns: {missing}")
+
+    df_signals = (
+        df_signals
+        .sort_values(["case_id", "vessel", "time_index"])
+        .set_index(["case_id", "vessel", "time_index"])
+    )
+
     all_sensors = df_signals["sensor"].unique()
 
     def process_event(ev):
-        etime = ev["event_timestamp"]
+        case, vessel, etime = ev["case_id"], ev["vessel"], ev["event_timestamp"]
         feat = {"event_id": ev.name}
+        try:
+            subset = df_signals.loc[(case, vessel)]
+        except KeyError:
+            return feat
+
         for w in windows:
             start = etime - pd.Timedelta(minutes=w)
             end = etime
-            win = df_signals[(df_signals["time_index"] >= start) &
-                             (df_signals["time_index"] < end)]
+
+            try:
+                win = subset.loc[start:end]
+            except KeyError:
+                continue
             if win.empty:
                 continue
 
@@ -208,10 +223,12 @@ def compute_window_features(df_events, df_signals, windows=(0.5,2,5, 15,30,45, 6
             for sensor, vals in sensor_groups.items():
                 if vals.size == 0:
                     continue
+
                 name = sensor.replace(" ", "_")
                 mean, std = vals.mean(), vals.std(ddof=0)
                 minv, maxv = vals.min(), vals.max()
                 start_val, end_val = vals[0], vals[-1]
+
                 feat.update({
                     f"{name}__mean_win{w}m": mean,
                     f"{name}__std_win{w}m": std,
@@ -220,33 +237,45 @@ def compute_window_features(df_events, df_signals, windows=(0.5,2,5, 15,30,45, 6
                     f"{name}__range_win{w}m": maxv - minv,
                     f"{name}__slope_win{w}m": calc_slope(vals),
                     f"{name}__last_minus_first_win{w}m": end_val - start_val,
-                    f"{name}__ratio_last_first_win{w}m": end_val / start_val if start_val != 0 else np.nan,
+                    f"{name}__ratio_last_first_win{w}m": (
+                        end_val / start_val if start_val != 0 else np.nan
+                    ),
                     f"{name}__cv_win{w}m": std / mean if mean != 0 else np.nan,
                     f"{name}__autocorr_lag1_win{w}m": calc_autocorr(vals, lag=1),
                 })
+
                 if len(vals) > 1:
                     diffs = np.abs(np.diff(vals))
                     feat[f"{name}__max_jump_win{w}m"] = diffs.max()
-                    feat[f"{name}__num_jumps_gt1p_win{w}m"] = (diffs > 0.01 * abs(mean)).sum()
+                    feat[f"{name}__num_jumps_gt1p_win{w}m"] = (
+                        (diffs > 0.01 * abs(mean)).sum()
+                    )
                 else:
                     feat[f"{name}__max_jump_win{w}m"] = 0.0
                     feat[f"{name}__num_jumps_gt1p_win{w}m"] = 0
 
-                if has_flow and "Flow" in sensor_groups:
+                if has_flow:
                     flow_vals = next((v for s, v in sensor_groups.items() if "Flow" in s), None)
                     if flow_vals is not None and flow_vals.mean() != 0:
                         feat[f"{name}__mean_normByFlow_win{w}m"] = mean / flow_vals.mean()
 
-            # pairwise correlations
-            sensors = list(sensor_groups.keys())
-            for s1, s2 in itertools.combinations(sensors, 2):
+            for s1, s2 in itertools.combinations(sensor_groups.keys(), 2):
                 v1, v2 = sensor_groups[s1], sensor_groups[s2]
                 if len(v1) > 1 and len(v1) == len(v2):
                     feat[f"corr_{s1.replace(' ','_')}__{s2.replace(' ','_')}_win{w}m"] = safe_corr(v1, v2)
+
         return feat
 
-    print(f"⏱️ Computing window features for {len(df_events)} events ...")
-    feat_list = Parallel(n_jobs=n_jobs, backend="loky")(delayed(process_event)(ev) for _, ev in df_events.iterrows())
+    print(f"Computing window features for {len(df_events)} events ...")
+    feat_list = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(process_event)(ev)
+        for ev in tqdm(
+            (row for _, row in df_events.iterrows()),
+            total=len(df_events),
+            desc="Processing events"
+        )
+    )
+
     feat_list = [f for f in feat_list if f]
     feat_df = pd.DataFrame(feat_list).set_index("event_id")
 
@@ -263,8 +292,11 @@ def compute_window_features(df_events, df_signals, windows=(0.5,2,5, 15,30,45, 6
 
     nunique = feat_df.nunique(dropna=True)
     feat_df = feat_df.drop(columns=nunique[nunique <= 1].index, errors="ignore")
-    print(f"✅ Generated {feat_df.shape[1]} feature columns")
-    return pd.concat([df_events.reset_index(drop=True), feat_df.reset_index(drop=True)], axis=1)
+
+    print(f"Generated {feat_df.shape[1]} feature columns")
+    return pd.concat(
+        [df_events.reset_index(drop=True), feat_df.reset_index(drop=True)], axis=1
+    )
 
 def generate_features(df_events, df_signals):
     #df_wide = (df_signals
@@ -283,10 +315,10 @@ def generate_features(df_events, df_signals):
     window_feats = engineer_domain_features(window_feats)
 
     full_feats = build_last_events_features(df_events, window_feats, N=5)
-    drop_cols = ["duration_min", "case_id", "activity", "resource", "event_timestamp",
+    drop_cols = ["duration_min", "case_id", "activity", "vessel", "event_timestamp",
                  "start_time", "end_time", "source"]
     full_feats = full_feats.drop(columns=drop_cols, errors="ignore")
-    full_feats.to_csv("data/feats_from_analysis_without_drifts_and_interactions.csv", index=False)
+    #full_feats.to_csv("data/feats_from_analysis_without_drifts_and_interactions.csv", index=False)
     return full_feats
 
 def visualize_tree(model, feature_names, filename="tree_output"):
@@ -301,39 +333,101 @@ def visualize_tree(model, feature_names, filename="tree_output"):
     graphviz.Source(dot).render(filename, format="png", cleanup=True)
     print(f"saved decision tree: {filename}.png")
 
+def train_decision_tree(X, y, cv_folds=5):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.10,
+                                                        stratify=y, random_state=42)
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+
+    depth_range = range(2, 8)
+    depth_scores = []
+    for depth in depth_range:
+        clf = DecisionTreeClassifier(
+            random_state=42,
+            max_depth=depth,
+            min_samples_leaf=20,
+            min_samples_split=10,
+            class_weight="balanced"
+        )
+        f1 = cross_val_score(clf, X_train, y_train, cv=cv, scoring="accuracy").mean()
+        depth_scores.append((depth, f1))
+    best_depth, best_f1 = max(depth_scores, key=lambda x: x[1])
+    print(f"Best max_depth: {best_depth} (F1={best_f1:.3f})")
+
+    base_tree = DecisionTreeClassifier(
+        random_state=42,
+        max_depth=best_depth,
+        min_samples_leaf=20,
+        min_samples_split=10,
+        class_weight="balanced"
+    )
+    base_tree.fit(X_train, y_train)
+
+    path = base_tree.cost_complexity_pruning_path(X_train, y_train)
+    alphas = path.ccp_alphas
+
+    alpha_scores = []
+    for ccp_alpha in np.unique(np.linspace(alphas.min(), alphas.max(), 25)):
+        clf = DecisionTreeClassifier(
+            random_state=42,
+            max_depth=best_depth,
+            min_samples_split=10,
+            min_samples_leaf=20,
+            class_weight="balanced",
+            ccp_alpha=ccp_alpha
+        )
+        score = cross_val_score(clf, X_train, y_train, cv=cv, scoring="accuracy").mean()
+        alpha_scores.append((ccp_alpha, score))
+    best_alpha, best_alpha_score = max(alpha_scores, key=lambda x: x[1])
+    print(f"Best ccp_alpha: {best_alpha:.6f} (F1={best_alpha_score:.3f})")
+
+    tree_pruned = DecisionTreeClassifier(
+        random_state=42,
+        max_depth=best_depth,
+        min_samples_leaf=20,
+        min_samples_split=10,
+        class_weight="balanced",
+        ccp_alpha=best_alpha
+    )
+    tree_pruned.fit(X_train, y_train)
+
+    probs = tree_pruned.predict_proba(X_test)[:, 1]
+    prec, rec, thr = precision_recall_curve(y_test, probs)
+    f1 = 2 * prec * rec / (prec + rec)
+    best_thr = thr[np.nanargmax(f1)]
+    y_pred_opt = (probs >= best_thr).astype(int)
+    print(f"Best threshold={best_thr:.2f}, F1={np.nanmax(f1):.3f}")
+    print(classification_report(y_test, y_pred_opt))
+    ap = average_precision_score(y_test, probs)
+    print(f"PR-AUC={ap:.3f}")
+    print(export_text(tree_pruned, feature_names=list(X.columns), decimals=3))
+
+    fi = pd.Series(tree_pruned.feature_importances_, index=X.columns)
+    print(fi[fi > 0].sort_values(ascending=False).head(15))
+
+    return tree_pruned
+
 def main():
     freeze_support()
-    df_events = pd.read_csv("data/process_events.csv", parse_dates=["start_time", "end_time", "event_timestamp"])
-    df_signals = pd.read_csv("data/sensor_long.csv", parse_dates=["timestamp"]).rename(columns={"timestamp": "time_index"})
+    df_events = pd.read_csv("data/process_events2.csv", parse_dates=["start_time", "end_time", "event_timestamp"])
+    df_signals = pd.read_csv("data/sensor_long2.csv", parse_dates=["timestamp"]).rename(columns={"timestamp": "time_index"})
 
     print(f"loaded {len(df_events)} events and {len(df_signals)} sensor rows")
+    #print(count_predecessor_events(df_events))
+
     full_feats = generate_features(df_events, df_signals)
+    #full_feats = pd.read_csv("data/full_feats_vesselid.csv")
+
     X = full_feats.drop(columns="target", errors="ignore")
     y = full_feats["target"]
     X = prune_features(X, y)
 
     print(f"feature matrix: {X.shape[0]} x {X.shape[1]}  positives={y.sum()}")
-    print(count_predecessor_events(df_events))
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, stratify=y, random_state=42)
-    depths = range(1, 6)
-    scores = [cross_val_score(DecisionTreeClassifier(max_depth=d, random_state=42, class_weight="balanced"),
-                              X_train, y_train, cv=3, scoring="f1").mean() for d in depths]
-    best_depth = depths[int(np.argmax(scores))]
-    print(f"best max_depth: {best_depth}")
-
-    model = DecisionTreeClassifier(max_depth=best_depth, random_state=42, class_weight="balanced")
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-
-    print("\nclassification report:\n", classification_report(y_test, y_pred))
-    print(export_text(model, feature_names=list(X.columns)))
+    model = train_decision_tree(X, y)
     visualize_tree(model, X.columns)
 
-    imp = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False)
-    print("\ntop 20 features:\n", imp.head(20))
-    full_feats.to_csv("data/enriched_with_history.csv", index=False)
-    print("saved data/enriched_with_history.csv")
+    full_feats.to_csv("data/with_vesselmatch.csv", index=False)
+    print("saved data/with_vesselmatch.csv")
 
 def main_split_by_activity():
     full_feats = pd.read_csv("data/feats_from_analysis_without_drifts_and_interactions.csv")
@@ -373,7 +467,7 @@ def main_split_by_activity():
     print("\nTop 20 Global Features:\n", importances.head(20))
 
     # === ACTIVITY-SPECIFIC ANALYSIS ===========================================
-    print("\n🔍 Evaluating per-activity model performance ...")
+    print("\nEvaluating per-activity model performance ...")
 
     results = []
     activity_cols = [c for c in X.columns if c.startswith("activity_")]
@@ -419,18 +513,18 @@ def main_split_by_activity():
             "f1_positive": f1,
             "recall_positive": rec
             })
-            print(f"🔸 {activity_col}: acc={acc:.3f}, f1={f1:.3f}, rec={rec}, best_depth={local_depth}, n={len(subset)}")
+            print(f"{activity_col}: acc={acc:.3f}, f1={f1:.3f}, rec={rec}, best_depth={local_depth}, n={len(subset)}")
         except Exception as e: continue
 
     res_df = pd.DataFrame(results).sort_values("recall_positive", ascending=False)
     best = res_df.iloc[0]
-    print("\n🏁 Best-performing activity:")
+    print("\nBest-performing activity:")
     print(best)
     res_df.to_csv("data/activity_tree_performance.csv", index=False)
-    print("💾 Saved → data/activity_tree_performance.csv")
+    print("Saved → data/activity_tree_performance.csv")
 
     full_feats.to_csv("data/enriched_with_history.csv", index=False)
-    print("💾 Saved → data/enriched_with_history.csv")
+    print("Saved → data/enriched_with_history.csv")
 
 
 if __name__ == "__main__":
