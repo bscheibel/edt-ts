@@ -2,15 +2,15 @@
 
 import itertools
 import numpy as np
-from imblearn.pipeline import Pipeline
-from imblearn.over_sampling import SMOTE
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
+from collections import Counter
+from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import RandomUnderSampler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, learning_curve
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.tree import DecisionTreeClassifier, export_text
-from sklearn.metrics import classification_report, precision_recall_curve, average_precision_score, make_scorer
+from sklearn.metrics import classification_report, precision_recall_curve, average_precision_score
 from sklearn import tree
 from joblib import Parallel, delayed
 from multiprocessing import freeze_support
@@ -134,8 +134,8 @@ def build_last_events_features(df, window_feats, N=2, target_activity="Pump adju
     df_sorted = df.sort_values(["case_id", "event_timestamp"]).copy()
 
     for col in ["runtime_min", "recent_pump_adjustment_flag"]:
-       if col not in df_sorted:
-           raise ValueError(f"Missing feature {col}")
+        if col not in df_sorted:
+            raise ValueError(f"Missing feature {col}")
 
     current_activity = pd.get_dummies(df_sorted[["activity"]], prefix="activity", drop_first=True)
 
@@ -161,7 +161,7 @@ def build_last_events_features(df, window_feats, N=2, target_activity="Pump adju
         .join(vessel_enc, how="left")
         .join(current_activity, how="left")
         .join(prev_feats, how="left"))
-    #feats = window_feats.copy()
+
     feats["target"] = target
     feats = feats.dropna(subset=["target"])
     feats["target"] = feats["target"].astype(int)
@@ -181,36 +181,6 @@ def engineer_domain_features(X: pd.DataFrame) -> pd.DataFrame:
     corr_col = "corr_Pump_Circulation_Flow__Tank_Pressure_win60m"
     if corr_col in X:
         Xn["feat_flow_pressure_uncoupled"] = (X[corr_col] < 0.2).astype(int)
-    if {"Filter_1_Inlet_Pressure__slope_win5m", "Filter_1_Inlet_Pressure__slope_win45m"} <= set(X.columns):
-        Xn["feat_f1ip_slope_accel_5_45"] = (
-                X["Filter_1_Inlet_Pressure__slope_win5m"] - X["Filter_1_Inlet_Pressure__slope_win45m"]
-        )
-
-    if {"Filter_1_DeltaP__cv_win2m", "Filter_1_DeltaP__cv_win45m"} <= set(X.columns):
-        Xn["feat_f1dp_cv_ratio_2_45"] = (
-                X["Filter_1_DeltaP__cv_win2m"] / (X["Filter_1_DeltaP__cv_win45m"] + 1e-6)
-        )
-
-    if {"Filter_1_Inlet_Pressure__mean_win15m", "Pump_Circulation_Flow__mean_win15m"} <= set(X.columns):
-        Xn["feat_inlet_to_flow_ratio_win15m"] = (
-                X["Filter_1_Inlet_Pressure__mean_win15m"] / (X["Pump_Circulation_Flow__mean_win15m"] + 1e-6)
-        )
-
-    if {"Filter_1_Inlet_Pressure__mean_win15m", "Filter_2_DeltaP__mean_win15m"} <= set(X.columns):
-        Xn["feat_filter_balance_win15m"] = (
-                X["Filter_1_Inlet_Pressure__mean_win15m"] - X["Filter_2_DeltaP__mean_win15m"]
-        )
-
-    if {"Pump_Circulation_Flow__mean_win15m", "Filter_1_DeltaP__mean_win15m"} <= set(X.columns):
-        Xn["flow_pressure_filter1_win15m"] = (
-                X["Pump_Circulation_Flow__mean_win15m"] * X["Filter_1_DeltaP__mean_win15m"]
-        )
-
-    act_col = "activity_Charging"
-    if act_col in X.columns and "Filter_1_Inlet_Pressure__slope_win5m" in X.columns:
-        Xn["feat_charge_slope_interact"] = (
-                X[act_col] * X["Filter_1_Inlet_Pressure__slope_win5m"]
-        )
     return Xn
 
 def compute_window_features(df_events: pd.DataFrame,df_signals: pd.DataFrame,windows=(0.1,0.5, 2, 5, 15, 30, 45, 60,100),n_jobs=-1):
@@ -358,115 +328,83 @@ def visualize_tree(model, feature_names, filename="tree_output"):
         class_names=["no adjustment", "pump adjustment next"],
         filled=True,
         rounded=True,
-        precision=2,
-        impurity=False
+        precision=2
     )
     graphviz.Source(dot).render(filename, format="png", cleanup=True)
-    print(f"Saved decision tree: {filename}.png")
+    print(f"saved decision tree: {filename}.png")
 
+def train_decision_tree(X, y, cv_folds=5):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.10,
+                                                        stratify=y, random_state=42)
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
 
-def train_decision_tree(X, y, cv_folds=5, random_state=42):
-
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.10, stratify=y, random_state=random_state
-    )
-
-    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    ap_scorer = 'f1'
-
-    param_grid = {
-        "max_depth": [3,4,5,6],
-        "min_samples_leaf": [5,10,20],
-        "min_samples_split": [5,10,20]
-    }
-
-    best_score, best_params = -np.inf, None
-    for depth in param_grid["max_depth"]:
-        for leaf in param_grid["min_samples_leaf"]:
-            for split in param_grid["min_samples_split"]:
-                clf = DecisionTreeClassifier(
-                    random_state=random_state,
-                    max_depth=depth,
-                    min_samples_leaf=leaf,
-                    min_samples_split=split,
-                    class_weight="balanced",
-                    criterion="log_loss"
-                )
-                score = cross_val_score(clf, X_train, y_train, cv=cv, scoring=ap_scorer).mean()
-                if score > best_score:
-                    best_score, best_params = score, (depth, leaf, split)
-
-
-    best_depth, best_leaf, best_split = best_params
-    print(f"Best params → depth={best_depth}, leaf={best_leaf}, split={best_split}, PR-AUC={best_score:.3f}")
+    depth_range = range(2, 8)
+    depth_scores = []
+    for depth in depth_range:
+        clf = DecisionTreeClassifier(
+            random_state=42,
+            max_depth=depth,
+            min_samples_leaf=20,
+            min_samples_split=10,
+            class_weight="balanced"
+        )
+        f1 = cross_val_score(clf, X_train, y_train, cv=cv, scoring="accuracy").mean()
+        depth_scores.append((depth, f1))
+    best_depth, best_f1 = max(depth_scores, key=lambda x: x[1])
+    print(f"Best max_depth: {best_depth} (F1={best_f1:.3f})")
 
     base_tree = DecisionTreeClassifier(
-        random_state=random_state,
+        random_state=42,
         max_depth=best_depth,
-        min_samples_leaf=best_leaf,
-        min_samples_split=best_split,
-        class_weight="balanced",
-        criterion="log_loss"
+        min_samples_leaf=20,
+        min_samples_split=10,
+        class_weight="balanced"
     )
     base_tree.fit(X_train, y_train)
 
     path = base_tree.cost_complexity_pruning_path(X_train, y_train)
-    alphas = np.unique(np.linspace(path.ccp_alphas.min(), path.ccp_alphas.max(), 25))
+    alphas = path.ccp_alphas
 
-    best_alpha, best_alpha_score = 0.0, -np.inf
-    for ccp_alpha in alphas:
+    alpha_scores = []
+    for ccp_alpha in np.unique(np.linspace(alphas.min(), alphas.max(), 25)):
         clf = DecisionTreeClassifier(
-            random_state=random_state,
+            random_state=42,
             max_depth=best_depth,
-            min_samples_split=best_split,
-            min_samples_leaf=best_leaf,
+            min_samples_split=10,
+            min_samples_leaf=20,
             class_weight="balanced",
-            criterion="log_loss",
             ccp_alpha=ccp_alpha
         )
-        score = cross_val_score(clf, X_train, y_train, cv=cv, scoring=ap_scorer).mean()
-        if score > best_alpha_score:
-            best_alpha, best_alpha_score = ccp_alpha, score
-
-    print(f"Best pruning α={best_alpha:.6f} (PR-AUC={best_alpha_score:.3f})")
+        score = cross_val_score(clf, X_train, y_train, cv=cv, scoring="accuracy").mean()
+        alpha_scores.append((ccp_alpha, score))
+    best_alpha, best_alpha_score = max(alpha_scores, key=lambda x: x[1])
+    print(f"Best ccp_alpha: {best_alpha:.6f} (F1={best_alpha_score:.3f})")
 
     tree_pruned = DecisionTreeClassifier(
-        random_state=random_state,
+        random_state=42,
         max_depth=best_depth,
-        min_samples_leaf=best_leaf,
-        min_samples_split=best_split,
+        min_samples_leaf=20,
+        min_samples_split=10,
         class_weight="balanced",
-        criterion="log_loss",
         ccp_alpha=best_alpha
     )
     tree_pruned.fit(X_train, y_train)
 
-    calibrated = CalibratedClassifierCV(tree_pruned, cv=cv, method="isotonic")
-    calibrated.fit(X_train, y_train)
-    probs = calibrated.predict_proba(X_test)[:, 1]
+    probs = tree_pruned.predict_proba(X_test)[:, 1]
     prec, rec, thr = precision_recall_curve(y_test, probs)
-    f1_vals = 2 * prec * rec / (prec + rec)
-    best_thr = thr[np.nanargmax(f1_vals)]
-    best_f1 = np.nanmax(f1_vals)
-    y_pred = (probs >= best_thr).astype(int)
-
+    f1 = 2 * prec * rec / (prec + rec)
+    best_thr = thr[np.nanargmax(f1)]
+    y_pred_opt = (probs >= best_thr).astype(int)
+    print(f"Best threshold={best_thr:.2f}, F1={np.nanmax(f1):.3f}")
+    print(classification_report(y_test, y_pred_opt))
     ap = average_precision_score(y_test, probs)
-
-    calibrated.fit(X_train, y_train)
-    print(f"\nOptimal threshold={best_thr:.2f}, F1={best_f1:.3f}, PR-AUC={ap:.3f}")
-    print("\nClassification report:\n", classification_report(y_test, y_pred, digits=3))
-
-    print(f"Tree depth: {tree_pruned.get_depth()}, number of leaves: {tree_pruned.get_n_leaves()}")
-
-    print("\nDecision Rules:\n")
+    print(f"PR-AUC={ap:.3f}")
     print(export_text(tree_pruned, feature_names=list(X.columns), decimals=3))
 
     fi = pd.Series(tree_pruned.feature_importances_, index=X.columns)
-    print("\nTop 15 feature importances:\n", fi[fi > 0].sort_values(ascending=False).head(15))
+    print(fi[fi > 0].sort_values(ascending=False).head(15))
 
-    return calibrated, tree_pruned
-
+    return tree_pruned
 
 def main():
     freeze_support()
@@ -476,8 +414,8 @@ def main():
     print(f"loaded {len(df_events)} events and {len(df_signals)} sensor rows")
     #print(count_predecessor_events(df_events))
 
-    #full_feats = generate_features(df_events, df_signals)
-    full_feats = pd.read_csv("data/with_vesselmatch1.csv")
+    full_feats = generate_features(df_events, df_signals)
+    #full_feats = pd.read_csv("data/full_feats_vesselid.csv")
 
     X = full_feats.drop(columns="target", errors="ignore")
     y = full_feats["target"]
@@ -485,109 +423,110 @@ def main():
 
     print(f"feature matrix: {X.shape[0]} x {X.shape[1]}  positives={y.sum()}")
 
-    calibrated, model = train_decision_tree(X, y)
+    model = train_decision_tree(X, y)
     visualize_tree(model, X.columns)
 
-    full_feats.to_csv("data/with_vesselmatch1.csv", index=False)
-    #print("saved data/with_vesselmatch1.csv")
+    full_feats.to_csv("data/with_vesselmatch.csv", index=False)
+    print("saved data/with_vesselmatch.csv")
 
-def main_split_by_activity_optimized():
-    full_feats = pd.read_csv("data/with_vesselmatch1.csv")
+def main_split_by_activity():
+    full_feats = pd.read_csv("data/feats_from_analysis_without_drifts_and_interactions.csv")
+
     X = full_feats.drop(columns="target", errors="ignore")
     y = full_feats["target"]
+    print(f"Feature matrix: {X.shape[0]} × {X.shape[1]}  (positives={y.sum()})")
 
-    print(f"Feature matrix: {X.shape[0]} × {X.shape[1]} (positives={y.sum()})")
+    # X = prune_features(X, y, importance_threshold=0.0009, corr_threshold=0.9)
 
+    # === GLOBAL MODEL ==========================================================
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.1, stratify=y, random_state=42
+    )
+
+    depths = range(1, 6)
+    scores = [
+        cross_val_score(
+            DecisionTreeClassifier(max_depth=d, random_state=42, class_weight="balanced"),
+            X_train, y_train, cv=5, scoring="accuracy"
+        ).mean()
+        for d in depths
+    ]
+    best_depth = depths[int(np.argmax(scores))]
+    print(f"Best global max_depth: {best_depth}")
+
+    model = DecisionTreeClassifier(max_depth=best_depth,
+                                   random_state=42,
+                                   class_weight="balanced")
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    print("\nGlobal Classification Report:\n", classification_report(y_test, y_pred))
+    visualize_tree(model, X.columns)
+
+    importances = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False)
+    print("\nTop 20 Global Features:\n", importances.head(20))
+
+    # === ACTIVITY-SPECIFIC ANALYSIS ===========================================
     print("\nEvaluating per-activity model performance ...")
+
     results = []
     activity_cols = [c for c in X.columns if c.startswith("activity_")]
 
     for activity_col in activity_cols:
+        # Subset data where this current-activity onehot == 1
         subset = X[X[activity_col] == 1]
-
         y_sub = y.loc[subset.index]
-        n_samples = len(subset)
-        subset = prune_features(subset, y_sub, importance_threshold=0.001, corr_threshold=0.85)
 
-        if y_sub.nunique() < 2 or n_samples < 100:
-            print("Skipped: " + activity_col)
+        if y_sub.nunique() < 2 or len(subset) < 20:
             continue
-
         try:
             X_train, X_test, y_train, y_test = train_test_split(
-                subset, y_sub, test_size=0.1, stratify=y_sub, random_state=42
+                subset, y_sub, test_size=0.25, stratify=y_sub, random_state=42
             )
-        except:
-            print("Skipped: " + activity_col)
-            continue
 
-        if len(X_train) >= 30:
-            X_train_inner, X_val, y_train_inner, y_val = train_test_split(
-                X_train, y_train, test_size=0.1, stratify=y_train, random_state=42
-            )
-        else:
-            X_train_inner, X_val, y_train_inner, y_val = X_train, X_test, y_train, y_test
+            depths = range(1, 6)
+            scores = [
+            cross_val_score(
+                DecisionTreeClassifier(max_depth=d, random_state=42, class_weight="balanced"),
+                X_train, y_train, cv=5, scoring="accuracy"
+            ).mean()
+            for d in depths
+            ]
+            local_depth = depths[int(np.argmax(scores))]
 
-        candidate_depths = range(1, 4)
-        best_depth, best_val_score = 1, 0.0
+            model = DecisionTreeClassifier(max_depth=local_depth,
+                                       random_state=42,
+                                       class_weight="balanced")
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
 
-        for d in candidate_depths:
-            dt = DecisionTreeClassifier(
-                max_depth=d,
-                min_samples_leaf=5,
-                min_samples_split=10,
-                class_weight="balanced",
-                criterion="log_loss",
-                random_state=42
-            )
-            dt.fit(X_train_inner, y_train_inner)
-            val_score = dt.score(X_val, y_val)
-            if val_score > best_val_score:
-                best_val_score, best_depth = val_score, d
+            rep = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+            acc = rep["accuracy"]
+            rec = rep["1"]["recall"]
 
-        final_model = DecisionTreeClassifier(
-            max_depth=best_depth,
-            min_samples_leaf=5,
-            min_samples_split=10,
-            class_weight="balanced",
-            criterion="log_loss",
-            random_state=42
-        )
-        final_model.fit(X_train, y_train)
-
-        y_pred = final_model.predict(X_test)
-        rep = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
-        print(f"\n=== {activity_col} ===")
-        print(classification_report(y_test, y_pred, digits=3, zero_division=0))
-
-        visualize_tree(final_model, subset.columns, filename=f"{activity_col}_model")
-
-        results.append({
-            "activity": activity_col.replace("activity_", ""),
-            "n_samples": n_samples,
-            "best_depth": best_depth,
-            "accuracy": rep["accuracy"],
-            "f1_positive": rep["1"]["f1-score"],
-            "recall_positive": rep["1"]["recall"]
-        })
-
-        print(f"{activity_col}: acc={rep['accuracy']:.3f}, "
-              f"f1={rep['1']['f1-score']:.3f}, "
-              f"rec={rep['1']['recall']:.3f}, "
-              f"best_depth={best_depth}, "
-              f"n={n_samples}")
+            f1 = rep["1"]["f1-score"]
+            results.append({
+            "activity": activity_col.replace("activity_",""),
+            "n_samples": len(subset),
+            "best_depth": local_depth,
+            "accuracy": acc,
+            "f1_positive": f1,
+            "recall_positive": rec
+            })
+            print(f"{activity_col}: acc={acc:.3f}, f1={f1:.3f}, rec={rec}, best_depth={local_depth}, n={len(subset)}")
+        except Exception as e: continue
 
     res_df = pd.DataFrame(results).sort_values("recall_positive", ascending=False)
-    if not res_df.empty:
-        best = res_df.iloc[0]
-        print("\nBest-performing activity:")
-        print(best)
-        #res_df.to_csv("data/activity_tree_performance.csv", index=False)
-        #print("Saved → data/activity_tree_performance.csv")
+    best = res_df.iloc[0]
+    print("\nBest-performing activity:")
+    print(best)
+    res_df.to_csv("data/activity_tree_performance.csv", index=False)
+    print("Saved → data/activity_tree_performance.csv")
 
-    #full_feats.to_csv("data/enriched_with_history.csv", index=False)
-    #print("Saved → data/enriched_with_history.csv")
+    full_feats.to_csv("data/enriched_with_history.csv", index=False)
+    print("Saved → data/enriched_with_history.csv")
+
 
 if __name__ == "__main__":
     main()
-    #main_split_by_activity_optimized()
+    #main_split_by_activity()
